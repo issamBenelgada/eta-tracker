@@ -10,24 +10,19 @@ const __dirname = path.dirname(__filename);
 const ROOT = path.resolve(__dirname, '..');
 const PUBLIC_DIR = path.join(ROOT, 'public');
 const DATA_DIR = path.join(ROOT, 'data');
-const LOG_PATH = path.join(DATA_DIR, 'eta-log.csv');
+const TRAJECTS_PATH = path.join(DATA_DIR, 'trajects.json');
 const CONFIG_PATH = path.join(ROOT, 'config.json');
 
 function loadConfig() {
   try {
     const raw = fs.readFileSync(CONFIG_PATH, 'utf-8');
     const cfg = JSON.parse(raw);
-    const required = ['apiKey', 'origin', 'destination'];
-    for (const k of required) {
-      if (!cfg[k] || typeof cfg[k] !== 'string' || !cfg[k].trim()) {
-        throw new Error(`config.${k} is required`);
-      }
+    if (!cfg.apiKey || typeof cfg.apiKey !== 'string' || !cfg.apiKey.trim()) {
+      throw new Error('config.apiKey is required');
     }
     cfg.mode = cfg.mode || 'driving';
-    cfg.intervalMinutes = Number(cfg.intervalMinutes || 5);
-    if (!Number.isFinite(cfg.intervalMinutes) || cfg.intervalMinutes <= 0) {
-      cfg.intervalMinutes = 5;
-    }
+    cfg.intervalMinutes = Number(cfg.intervalMinutes || 1);
+    if (!Number.isFinite(cfg.intervalMinutes) || cfg.intervalMinutes <= 0) cfg.intervalMinutes = 5;
     cfg.port = Number(process.env.PORT || cfg.port || 8080);
     return cfg;
   } catch (err) {
@@ -36,15 +31,60 @@ function loadConfig() {
   }
 }
 
-function ensureDirsAndLog() {
+function ensureDirs() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-  if (!fs.existsSync(LOG_PATH)) {
-    fs.writeFileSync(
-      LOG_PATH,
-      'timestamp_iso,duration_seconds,distance_meters,status,origin,destination,mode\n',
-      'utf-8'
-    );
+}
+
+function getLogPathFor(fileName) {
+  return path.join(DATA_DIR, fileName);
+}
+
+function ensureLogFile(fileName) {
+  const p = getLogPathFor(fileName);
+  if (!fs.existsSync(p)) {
+    fs.writeFileSync(p, 'timestamp_iso,duration_seconds,distance_meters,status,origin,destination,mode\n', 'utf-8');
   }
+  return p;
+}
+
+function sanitizeId(id) {
+  return String(id || '').trim().replace(/[^a-zA-Z0-9_-]/g, '_') || null;
+}
+
+function defaultFileForId(id) {
+  return `${id}.csv`;
+}
+
+function loadTrajectsFromStore(config) {
+  ensureDirs();
+  if (!fs.existsSync(TRAJECTS_PATH)) {
+    fs.writeFileSync(TRAJECTS_PATH, JSON.stringify([], null, 2), 'utf-8');
+  }
+  try {
+    const raw = fs.readFileSync(TRAJECTS_PATH, 'utf-8');
+    const list = JSON.parse(raw);
+    if (!Array.isArray(list)) throw new Error('trajects.json must be an array');
+    return list.map((t, i) => {
+      if (!t || typeof t !== 'object') throw new Error(`trajects[${i}] invalid`);
+      const id = sanitizeId(t.id) || `traj${i + 1}`;
+      const origin = String(t.origin || '').trim();
+      const destination = String(t.destination || '').trim();
+      const mode = t.mode || config.mode || 'driving';
+      const intervalMinutes = Number(t.intervalMinutes || config.intervalMinutes || 1);
+      const file = t.file || defaultFileForId(id);
+      const name = String(t.name || '').trim() || `${origin} -> ${destination}`;
+      if (!origin || !destination) throw new Error(`trajects[${i}] missing origin/destination`);
+      return { id, name, origin, destination, mode, intervalMinutes, file };
+    });
+  } catch (e) {
+    console.error('[store] Failed to load trajects.json', e);
+    return [];
+  }
+}
+
+function saveTrajectsToStore(list) {
+  ensureDirs();
+  fs.writeFileSync(TRAJECTS_PATH, JSON.stringify(list, null, 2), 'utf-8');
 }
 
 function buildDistanceMatrixUrl({ apiKey, origin, destination, mode }) {
@@ -100,7 +140,7 @@ function csvEscape(value) {
   return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
 }
 
-function appendLog(entry) {
+function appendLogTo(fileName, entry) {
   const line = [
     csvEscape(entry.timestamp_iso),
     csvEscape(entry.duration_seconds),
@@ -110,7 +150,8 @@ function appendLog(entry) {
     csvEscape(entry.destination),
     csvEscape(entry.mode),
   ].join(',') + '\n';
-  fs.appendFile(LOG_PATH, line, (err) => {
+  const p = getLogPathFor(fileName);
+  fs.appendFile(p, line, (err) => {
     if (err) console.error('[log] append error', err);
   });
 }
@@ -130,7 +171,7 @@ async function collectOnce(config) {
       destination: config.destination,
       mode: config.mode,
     };
-    appendLog(entry);
+    appendLogTo(config.__file, entry);
     return entry;
   } catch (err) {
     const entry = {
@@ -143,14 +184,14 @@ async function collectOnce(config) {
       mode: config.mode,
       error: String(err && err.message ? err.message : err),
     };
-    appendLog(entry);
+    appendLogTo(config.__file, entry);
     return entry;
   }
 }
 
-function readHistory() {
+function readHistory(fileName) {
   try {
-    const raw = fs.readFileSync(LOG_PATH, 'utf-8');
+    const raw = fs.readFileSync(getLogPathFor(fileName), 'utf-8');
     const lines = raw.split(/\r?\n/).filter(Boolean);
     const header = lines.shift();
     const cols = header.split(',');
@@ -226,22 +267,26 @@ function serveStatic(req, res) {
 
 async function main() {
   const config = loadConfig();
-  ensureDirsAndLog();
+  ensureDirs();
 
-  let lastEntries = { forward: null, reverse: null };
+  let trajects = loadTrajectsFromStore(config);
+  const lastByTraject = {};
+  const pollers = new Map();
 
-  // initial collection (non-blocking) for both directions
-  collectOnce({ ...config }).then((e) => (lastEntries.forward = e)).catch(() => {});
-  collectOnce({ ...config, origin: config.destination, destination: config.origin })
-    .then((e) => (lastEntries.reverse = e))
-    .catch(() => {});
+  function startPoller(t) {
+    ensureLogFile(t.file);
+    lastByTraject[t.id] = lastByTraject[t.id] || { forward: null, reverse: null };
+    collectOnce({ ...t, apiKey: config.apiKey, __file: t.file }).then((e) => (lastByTraject[t.id].forward = e)).catch(() => {});
+    collectOnce({ ...t, apiKey: config.apiKey, origin: t.destination, destination: t.origin, __file: t.file }).then((e) => (lastByTraject[t.id].reverse = e)).catch(() => {});
+    const intervalMs = (Number(t.intervalMinutes) || config.intervalMinutes || 1) * 60 * 1000;
+    const handle = setInterval(async () => {
+      try { lastByTraject[t.id].forward = await collectOnce({ ...t, apiKey: config.apiKey, __file: t.file }); } catch {}
+      try { lastByTraject[t.id].reverse = await collectOnce({ ...t, apiKey: config.apiKey, origin: t.destination, destination: t.origin, __file: t.file }); } catch {}
+    }, intervalMs);
+    pollers.set(t.id, handle);
+  }
 
-  // schedule periodic collection for both directions
-  const intervalMs = config.intervalMinutes * 60 * 1000;
-  setInterval(async () => {
-    try { lastEntries.forward = await collectOnce({ ...config }); } catch {}
-    try { lastEntries.reverse = await collectOnce({ ...config, origin: config.destination, destination: config.origin }); } catch {}
-  }, intervalMs);
+  for (const t of trajects) startPoller(t);
 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
@@ -250,25 +295,59 @@ async function main() {
       res.end(JSON.stringify({ ok: true }));
       return;
     }
-    if (url.pathname === '/api/config') {
-      // do not leak API key
-      const safe = {
-        origin: config.origin,
-        destination: config.destination,
-        mode: config.mode,
-        intervalMinutes: config.intervalMinutes,
-      };
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(safe));
+    if (url.pathname === '/api/trajects') {
+      if (req.method === 'GET') {
+        const list = loadTrajectsFromStore(config).map((t) => ({ id: t.id, name: t.name, origin: t.origin, destination: t.destination, mode: t.mode, intervalMinutes: t.intervalMinutes }));
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(list));
+        return;
+      }
+      if (req.method === 'POST') {
+        let body = '';
+        req.on('data', (chunk) => (body += chunk));
+        req.on('end', () => {
+          try {
+            const data = JSON.parse(body || '{}');
+            const origin = String(data.origin || '').trim();
+            const destination = String(data.destination || '').trim();
+            const name = String(data.name || '').trim() || `${origin} -> ${destination}`;
+            const id = sanitizeId(data.id) || sanitizeId(name) || sanitizeId(`${origin}_${destination}`) || `traj${Date.now()}`;
+            const mode = (data.mode || config.mode || 'driving').trim();
+            const intervalMinutes = Number(data.intervalMinutes || config.intervalMinutes || 1);
+            if (!origin || !destination) throw new Error('origin and destination are required');
+            let list = loadTrajectsFromStore(config);
+            if (list.find((t) => t.id === id)) throw new Error('id already exists');
+            const file = data.file || defaultFileForId(id);
+            const t = { id, name, origin, destination, mode, intervalMinutes, file };
+            list.push(t);
+            saveTrajectsToStore(list);
+            trajects = list;
+            startPoller(t);
+            res.writeHead(201, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(t));
+          } catch (e) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ ok: false, error: String(e.message || e) }));
+          }
+        });
+        return;
+      }
+      res.writeHead(405, { 'Allow': 'GET, POST' });
+      res.end('Method Not Allowed');
       return;
     }
     if (url.pathname === '/api/eta') {
+      const currentTrajects = loadTrajectsFromStore(config);
+      const id = url.searchParams.get('id') || currentTrajects[0]?.id;
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ last: lastEntries }));
+      res.end(JSON.stringify({ last: lastByTraject[id] || null }));
       return;
     }
     if (url.pathname === '/api/history') {
-      const rows = readHistory();
+      const currentTrajects = loadTrajectsFromStore(config);
+      const id = url.searchParams.get('id') || currentTrajects[0]?.id;
+      const t = currentTrajects.find((x) => x.id === id) || currentTrajects[0];
+      const rows = readHistory(t.file);
       res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
       res.end(JSON.stringify(rows));
       return;

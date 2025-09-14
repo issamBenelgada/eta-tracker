@@ -10,6 +10,24 @@
   <body>
     <header>
       <h1>ETA Tracker</h1>
+      <div class="traj-picker">
+        <label for="trajSelect">Traject:</label>
+        <select id="trajSelect"></select>
+      </div>
+      <div class="traj-add">
+        <input id="newOrigin" placeholder="Origin" />
+        <span>→</span>
+        <input id="newDestination" placeholder="Destination" />
+        <input id="newName" placeholder="Display name (optional)" />
+        <select id="newMode">
+          <option value="driving" selected>driving</option>
+          <option value="walking">walking</option>
+          <option value="bicycling">bicycling</option>
+          <option value="transit">transit</option>
+        </select>
+        <input id="newInterval" type="number" min="1" value="1" title="Interval (minutes)" />
+        <button id="addTraject" class="secondary">Add</button>
+      </div>
       <div id="route"></div>
       <div id="meta"></div>
       <div class="controls">
@@ -42,9 +60,7 @@
       </section>
     </main>
 
-    <footer>
-      <small>Updates periodically based on server schedule.</small>
-    </footer>
+    
 
     <script src="/app.js"></script>
   </body>

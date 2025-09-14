@@ -37,15 +37,17 @@ npm start
 
 ## APIs
 
-- `GET /api/config` – Safe config for UI (no API key).
+- `GET /api/trajects` – List available trajects (id, origin, destination, mode).
+- `POST /api/trajects` – Add a traject: JSON `{id?, origin, destination, mode?, intervalMinutes?}`. Persists to `data/trajects.json` and starts polling.
 - `GET /api/eta` – Last collected entry.
 - `GET /api/history` – Entire CSV parsed as JSON.
   
 
 ## Data
 
-- CSV at `data/eta-log.csv` with header:
+- Per‑traject CSV files in `data/`, each with header:
   `timestamp_iso,duration_seconds,distance_meters,status,origin,destination,mode`
+- Traject registry at `data/trajects.json`.
 
 ## Notes
 

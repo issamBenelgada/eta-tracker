@@ -12,6 +12,10 @@ body {
 header { padding: 16px 20px; border-bottom: 1px solid #1e2235; }
 header h1 { margin: 0 0 6px; font-size: 20px; }
 #route { color: var(--muted); margin-bottom: 4px; }
+#trajSelect { background: #14182b; color: var(--fg); border: 1px solid #2a2f45; border-radius: 6px; padding: 6px 8px; }
+.traj-picker { margin-bottom: 6px; display: flex; gap: 8px; align-items: center; }
+.traj-add { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 8px; }
+.traj-add input, .traj-add select { background: #14182b; color: var(--fg); border: 1px solid #2a2f45; border-radius: 6px; padding: 6px 8px; }
 #meta { color: var(--muted); margin-bottom: 8px; }
 header .controls { margin-top: 8px; }
 .week-nav { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }

@@ -55,6 +55,33 @@ function defaultFileForId(id) {
   return `${id}.csv`;
 }
 
+function normalizeLocation(v) {
+  if (v == null) return null;
+  const num = (x) => {
+    const n = Number(x);
+    return Number.isFinite(n) ? n : null;
+  };
+  if (typeof v === 'string') {
+    const s = v.trim();
+    if (!s) return null;
+    // Normalize comma+space variations like "lat, lng"
+    return s.replace(/\s*,\s*/g, ',');
+  }
+  if (Array.isArray(v) && v.length === 2) {
+    const a = num(v[0]);
+    const b = num(v[1]);
+    if (a != null && b != null) return `${a},${b}`;
+    return null;
+  }
+  if (typeof v === 'object') {
+    const a = num(v.lat ?? v.latitude);
+    const b = num(v.lng ?? v.lon ?? v.longitude);
+    if (a != null && b != null) return `${a},${b}`;
+  }
+  // Fallback
+  return String(v).trim();
+}
+
 function loadTrajectsFromStore(config) {
   ensureDirs();
   if (!fs.existsSync(TRAJECTS_PATH)) {
@@ -67,8 +94,8 @@ function loadTrajectsFromStore(config) {
     return list.map((t, i) => {
       if (!t || typeof t !== 'object') throw new Error(`trajects[${i}] invalid`);
       const id = sanitizeId(t.id) || `traj${i + 1}`;
-      const origin = String(t.origin || '').trim();
-      const destination = String(t.destination || '').trim();
+      const origin = normalizeLocation(t.origin ?? (t.originLat != null && t.originLng != null ? { lat: t.originLat, lng: t.originLng } : null)) || '';
+      const destination = normalizeLocation(t.destination ?? (t.destinationLat != null && t.destinationLng != null ? { lat: t.destinationLat, lng: t.destinationLng } : null)) || '';
       const mode = t.mode || config.mode || 'driving';
       const intervalMinutes = Number(t.intervalMinutes || config.intervalMinutes || 1);
       const file = t.file || defaultFileForId(id);
@@ -87,52 +114,97 @@ function saveTrajectsToStore(list) {
   fs.writeFileSync(TRAJECTS_PATH, JSON.stringify(list, null, 2), 'utf-8');
 }
 
-function buildDistanceMatrixUrl({ apiKey, origin, destination, mode }) {
-  const params = new URLSearchParams({
-    origins: origin,
-    destinations: destination,
-    departure_time: 'now',
-    mode: mode || 'driving',
-    key: apiKey,
-  });
-  return `https://maps.googleapis.com/maps/api/distancematrix/json?${params.toString()}`;
-}
-
-function httpsJson(url) {
+function httpsRequestJson({ host, path: reqPath, method = 'GET', headers = {}, body = null }) {
   return new Promise((resolve, reject) => {
-    https
-      .get(url, (res) => {
-        let data = '';
-        res.on('data', (chunk) => (data += chunk));
-        res.on('end', () => {
-          try {
-            const json = JSON.parse(data);
-            resolve({ statusCode: res.statusCode, json });
-          } catch (e) {
-            reject(e);
-          }
-        });
-      })
-      .on('error', reject);
+    const req = https.request({ host, path: reqPath, method, headers }, (res) => {
+      let data = '';
+      res.on('data', (chunk) => (data += chunk));
+      res.on('end', () => {
+        try {
+          const json = data ? JSON.parse(data) : null;
+          resolve({ statusCode: res.statusCode, json });
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+    req.on('error', reject);
+    if (body != null) req.write(typeof body === 'string' ? body : JSON.stringify(body));
+    req.end();
   });
 }
 
-function parseDistanceMatrixResponse(json) {
-  // See: https://developers.google.com/maps/documentation/distance-matrix
-  const status = json.status || 'UNKNOWN';
-  const row = json.rows && json.rows[0];
-  const el = row && row.elements && row.elements[0];
-  const elStatus = el && el.status;
-  const distance = el && el.distance && el.distance.value; // meters
-  const duration = el && el.duration && el.duration.value; // seconds
-  const durationTraffic = el && el.duration_in_traffic && el.duration_in_traffic.value; // seconds
+function isLatLngString(s) {
+  if (typeof s !== 'string') return false;
+  const m = s.trim().match(/^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/);
+  return !!m;
+}
+
+function toRoutesWaypoint(value) {
+  // value is a normalized string like "lat,lng" or an address string
+  if (isLatLngString(value)) {
+    const [lat, lng] = value.split(',').map((x) => Number(x.trim()));
+    return { location: { latLng: { latitude: lat, longitude: lng } } };
+  }
+  return { address: String(value) };
+}
+
+function modeToRoutes(mode) {
+  const m = (mode || 'driving').toLowerCase();
+  if (m === 'walking') return 'WALK';
+  if (m === 'bicycling' || m === 'bicycle' || m === 'cycling') return 'BICYCLE';
+  if (m === 'transit') return 'TRANSIT';
+  return 'DRIVE';
+}
+
+async function computeRoute({ apiKey, origin, destination, mode }) {
+  const reqId = Math.random().toString(36).slice(2, 8);
+  console.log(`[routes:${reqId}] request: ${origin} -> ${destination} mode=${modeToRoutes(mode)} depart=now(omitted)`);
+  const body = {
+    origin: toRoutesWaypoint(origin),
+    destination: toRoutesWaypoint(destination),
+    travelMode: modeToRoutes(mode),
+    routingPreference: 'TRAFFIC_AWARE_OPTIMAL',
+    trafficModel: 'BEST_GUESS',
+    computeAlternativeRoutes: false,
+  };
+  const headers = {
+    'Content-Type': 'application/json',
+    'X-Goog-Api-Key': apiKey,
+    // Limit fields to what we need
+    'X-Goog-FieldMask': 'routes.duration,routes.staticDuration,routes.distanceMeters',
+  };
+  const { statusCode, json } = await httpsRequestJson({
+    host: 'routes.googleapis.com',
+    path: '/directions/v2:computeRoutes',
+    method: 'POST',
+    headers,
+    body,
+  });
+  if (statusCode !== 200) {
+    const errObj = json && json.error ? json.error : null;
+    console.error(`[routes:${reqId}] error status=${statusCode} details=${JSON.stringify(errObj)}`);
+    const msg = errObj && errObj.message ? errObj.message : `HTTP ${statusCode}`;
+    throw new Error(msg);
+  }
+  const route = json && Array.isArray(json.routes) && json.routes[0];
+  const durStr = route && route.duration; // e.g., "615s"
+  const staticDurStr = route && route.staticDuration; // e.g., "580s"
+  const dist = route && route.distanceMeters;
+  const toSeconds = (s) => {
+    if (!s || typeof s !== 'string') return null;
+    const m = s.match(/^(\d+)(?:\.(\d+))?s$/);
+    if (!m) return null;
+    return Number(m[1]);
+  };
   return {
-    apiStatus: status,
-    elementStatus: elStatus,
-    distance_meters: Number(distance) || null,
-    duration_seconds: Number(durationTraffic || duration) || null,
+    duration_seconds: toSeconds(durStr),
+    static_duration_seconds: toSeconds(staticDurStr),
+    distance_meters: Number(dist) || null,
   };
 }
+
+// Distance Matrix parsing removed; using Routes v2 instead
 
 function csvEscape(value) {
   if (value == null) return '';
@@ -157,23 +229,27 @@ function appendLogTo(fileName, entry) {
 }
 
 async function collectOnce(config) {
-  const url = buildDistanceMatrixUrl(config);
   try {
-    const { statusCode, json } = await httpsJson(url);
-    if (statusCode !== 200) throw new Error(`HTTP ${statusCode}`);
-    const parsed = parseDistanceMatrixResponse(json);
+    const parsed = await computeRoute(config);
     const entry = {
       timestamp_iso: new Date().toISOString(),
       duration_seconds: parsed.duration_seconds,
       distance_meters: parsed.distance_meters,
-      status: parsed.elementStatus || parsed.apiStatus || 'UNKNOWN',
+      status: 'OK',
       origin: config.origin,
       destination: config.destination,
       mode: config.mode,
     };
+    console.log(`[routes] success: ${config.origin} -> ${config.destination} dur=${entry.duration_seconds}s dist=${entry.distance_meters}m`);
     appendLogTo(config.__file, entry);
     return entry;
   } catch (err) {
+    console.error('[routes] failure:', {
+      origin: config.origin,
+      destination: config.destination,
+      mode: config.mode,
+      error: String(err && err.message ? err.message : err),
+    });
     const entry = {
       timestamp_iso: new Date().toISOString(),
       duration_seconds: '',
@@ -308,8 +384,15 @@ async function main() {
         req.on('end', () => {
           try {
             const data = JSON.parse(body || '{}');
-            const origin = String(data.origin || '').trim();
-            const destination = String(data.destination || '').trim();
+            // Accept origin/destination as string, [lat,lng], or {lat,lng}
+            let origin = normalizeLocation(data.origin);
+            let destination = normalizeLocation(data.destination);
+            if (!origin && data.originLat != null && data.originLng != null) {
+              origin = normalizeLocation({ lat: data.originLat, lng: data.originLng });
+            }
+            if (!destination && data.destinationLat != null && data.destinationLng != null) {
+              destination = normalizeLocation({ lat: data.destinationLat, lng: data.destinationLng });
+            }
             const name = String(data.name || '').trim() || `${origin} -> ${destination}`;
             const id = sanitizeId(data.id) || sanitizeId(name) || sanitizeId(`${origin}_${destination}`) || `traj${Date.now()}`;
             const mode = (data.mode || config.mode || 'driving').trim();

@@ -39,7 +39,7 @@ function buildChart(ctx, labels, data) {
       responsive: true,
       interaction: { mode: 'index', intersect: false },
       scales: {
-        y: { title: { display: true, text: 'Minutes' } },
+        y: { title: { display: true, text: 'Minutes' }, min: 0 },
         x: { ticks: { maxRotation: 0 } },
       },
       plugins: {

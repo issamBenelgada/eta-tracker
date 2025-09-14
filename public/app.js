@@ -5,6 +5,12 @@ async function fetchJSON(url, opts) {
 }
 
 const HOUR_MS = 60 * 60 * 1000;
+const LOCALE = 'en-GB';
+const TIME_FMT = { hour: '2-digit', minute: '2-digit', hour12: false };
+let APP_CFG = null;
+let APP_HISTORY = [];
+let chartInstance = null;
+let selectedDate = null; // Date at local midnight of selected day
 
 function formatMinutes(seconds) {
   if (seconds == null) return null;
@@ -18,16 +24,42 @@ function formatKm(meters) {
 
 function fmtTime(ts) {
   const d = new Date(ts);
-  return d.toLocaleString();
+  return d.toLocaleString(LOCALE);
 }
 
 function fmtTimeOnly(ts) {
   const d = new Date(ts);
-  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return d.toLocaleTimeString(LOCALE, TIME_FMT);
 }
 
 function dateKey(d) {
   return [d.getFullYear(), String(d.getMonth() + 1).padStart(2, '0'), String(d.getDate()).padStart(2, '0')].join('-');
+}
+
+function startOfDay(d) {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
+}
+
+function endOfDay(d) {
+  const s = startOfDay(d);
+  return new Date(s.getTime() + 24 * HOUR_MS);
+}
+
+function startOfWeek(d) {
+  const day = d.getDay(); // 0=Sun..6=Sat
+  const offset = (day + 6) % 7; // Monday-based week
+  const s = startOfDay(d);
+  return new Date(s.getTime() - offset * 24 * HOUR_MS);
+}
+
+function addDays(d, n) { return new Date(d.getTime() + n * 24 * HOUR_MS); }
+
+function shortDayName(d) {
+  return d.toLocaleDateString(LOCALE, { weekday: 'short' });
+}
+
+function monthDay(d) {
+  return d.toLocaleDateString(LOCALE, { month: 'short', day: '2-digit' });
 }
 
 function buildChart(ctx, points, xMin, xMax) {
@@ -64,7 +96,7 @@ function buildChart(ctx, points, xMin, xMax) {
               const v = Number(value);
               const rounded = Math.round(v / HOUR_MS) * HOUR_MS;
               const d = new Date(rounded);
-              return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+              return d.toLocaleTimeString(LOCALE, TIME_FMT);
             },
           },
         },
@@ -78,7 +110,7 @@ function buildChart(ctx, points, xMin, xMax) {
               const v = Number(items[0].parsed.x);
               const rounded = Math.round(v / HOUR_MS) * HOUR_MS;
               const d = new Date(rounded);
-              return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+              return d.toLocaleTimeString(LOCALE, TIME_FMT);
             },
           },
         },
@@ -87,27 +119,22 @@ function buildChart(ctx, points, xMin, xMax) {
   });
 }
 
-async function loadAll() {
-  const cfg = await fetchJSON('/api/config');
-  document.getElementById('route').textContent = `${cfg.origin} → ${cfg.destination} (${cfg.mode})`;
-  document.getElementById('meta').textContent = `Sample every ${cfg.intervalMinutes} min`;
-
-  const history = await fetchJSON('/api/history');
-  const now = new Date();
-  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
-  const end = new Date(start.getTime() + 24 * HOUR_MS);
-  const today = dateKey(now);
-  const dayHistory = history.filter((r) => dateKey(new Date(r.timestamp_iso)) === today);
+function renderSelectedDay() {
+  const start = startOfDay(selectedDate);
+  const end = endOfDay(selectedDate);
+  const selKey = dateKey(start);
+  const dayHistory = APP_HISTORY.filter((r) => dateKey(new Date(r.timestamp_iso)) === selKey);
   const points = dayHistory
     .filter((r) => r.duration_seconds != null)
     .map((r) => ({ x: new Date(r.timestamp_iso).getTime(), y: formatMinutes(r.duration_seconds) }));
 
   const ctx = document.getElementById('etaChart').getContext('2d');
-  const chart = buildChart(ctx, points, start.getTime(), end.getTime());
+  if (chartInstance) chartInstance.destroy();
+  chartInstance = buildChart(ctx, points, start.getTime(), end.getTime());
 
   const tbody = document.querySelector('#samples tbody');
   tbody.innerHTML = '';
-  for (const r of history.slice(-30).reverse()) {
+  for (const r of dayHistory.slice(-1440).reverse()) {
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td>${fmtTime(r.timestamp_iso)}</td>
@@ -118,7 +145,60 @@ async function loadAll() {
     tbody.appendChild(tr);
   }
 
-  // Manual collection removed; updates occur on server schedule only.
+  const currentDayLabel = document.getElementById('currentDayLabel');
+  const today = startOfDay(new Date());
+  const isToday = start.getTime() === today.getTime();
+  const label = selectedDate.toLocaleDateString(LOCALE, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+  currentDayLabel.textContent = `${isToday ? 'Today' : 'Selected'}: ${label}`;
+}
+
+function renderWeekControls() {
+  const weekStart = startOfWeek(selectedDate);
+  const weekEnd = addDays(weekStart, 6);
+  const weekLabel = document.getElementById('weekLabel');
+  weekLabel.textContent = `${monthDay(weekStart)} – ${monthDay(weekEnd)} (${weekStart.getFullYear()})`;
+
+  const container = document.getElementById('weekDays');
+  container.innerHTML = '';
+  for (let i = 0; i < 7; i++) {
+    const d = addDays(weekStart, i);
+    const btn = document.createElement('button');
+    btn.className = 'day-btn secondary';
+    btn.dataset.date = startOfDay(d).toISOString();
+    btn.textContent = `${shortDayName(d)} ${('0' + d.getDate()).slice(-2)}`;
+    if (startOfDay(d).getTime() === startOfDay(selectedDate).getTime()) {
+      btn.classList.add('active');
+    }
+    btn.onclick = () => {
+      selectedDate = startOfDay(d);
+      renderWeekControls();
+      renderSelectedDay();
+    };
+    container.appendChild(btn);
+  }
+}
+
+async function loadAll() {
+  APP_CFG = await fetchJSON('/api/config');
+  document.getElementById('route').textContent = `${APP_CFG.origin} → ${APP_CFG.destination} (${APP_CFG.mode})`;
+  // Removed sample interval message per request.
+
+  APP_HISTORY = await fetchJSON('/api/history');
+  selectedDate = startOfDay(new Date());
+
+  document.getElementById('prevWeek').onclick = () => {
+    selectedDate = addDays(startOfWeek(selectedDate), -7);
+    renderWeekControls();
+    renderSelectedDay();
+  };
+  document.getElementById('nextWeek').onclick = () => {
+    selectedDate = addDays(startOfWeek(selectedDate), 7);
+    renderWeekControls();
+    renderSelectedDay();
+  };
+
+  renderWeekControls();
+  renderSelectedDay();
 }
 
 loadAll().catch((e) => {

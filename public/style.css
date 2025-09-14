@@ -13,15 +13,20 @@ header { padding: 16px 20px; border-bottom: 1px solid #1e2235; }
 header h1 { margin: 0 0 6px; font-size: 20px; }
 #route { color: var(--muted); margin-bottom: 4px; }
 #meta { color: var(--muted); margin-bottom: 8px; }
+header .controls { margin-top: 8px; }
+.week-nav { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.week-days { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.current-day { color: var(--muted); margin-bottom: 4px; }
 button {
   background: var(--accent); color: white; border: 0; border-radius: 6px;
   padding: 8px 12px; cursor: pointer; font-weight: 600;
 }
 button:disabled { opacity: 0.7; cursor: default; }
+.secondary { background: transparent; color: var(--fg); border: 1px solid #2a2f45; }
+.day-btn.active { background: var(--accent); color: white; border-color: var(--accent); }
 main { padding: 20px; max-width: 1000px; margin: 0 auto; }
 section.chart { background: #14182b; padding: 12px; border-radius: 12px; }
 section.table { margin-top: 16px; }
 table { width: 100%; border-collapse: collapse; }
 th, td { padding: 8px; border-bottom: 1px solid #1e2235; text-align: left; }
 th { color: var(--muted); font-weight: 600; }
-

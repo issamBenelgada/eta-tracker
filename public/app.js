@@ -19,6 +19,11 @@ function formatMinutes(seconds) {
   return Math.round((seconds / 60) * 10) / 10;
 }
 
+function formatKm(meters) {
+  if (meters == null) return null;
+  return Math.round((meters / 1000) * 100) / 100;
+}
+
 function dateKey(d) {
   return [d.getFullYear(), String(d.getMonth() + 1).padStart(2, '0'), String(d.getDate()).padStart(2, '0')].join('-');
 }
@@ -68,16 +73,28 @@ function renderSelectedDay() {
   const toMinute = (ms) => Math.floor(ms / (60 * 1000)) * 60 * 1000;
   const fwdMap = new Map();
   const revMap = new Map();
+  const fwdDistMap = new Map();
+  const revDistMap = new Map();
   for (const p of fwd) fwdMap.set(toMinute(p.x), p.y);
   for (const p of rev) revMap.set(toMinute(p.x), p.y);
+  for (const r of dayHistory.filter((r) => r.origin === CURRENT.origin && r.destination === CURRENT.destination && r.distance_meters != null)) {
+    fwdDistMap.set(toMinute(new Date(r.timestamp_iso).getTime()), r.distance_meters);
+  }
+  for (const r of dayHistory.filter((r) => r.origin === CURRENT.destination && r.destination === CURRENT.origin && r.distance_meters != null)) {
+    revDistMap.set(toMinute(new Date(r.timestamp_iso).getTime()), r.distance_meters);
+  }
   const allTimes = Array.from(new Set([...fwdMap.keys(), ...revMap.keys()])).sort((a, b) => b - a);
   for (const t of allTimes) {
     const tr = document.createElement('tr');
     const fv = fwdMap.has(t) ? fwdMap.get(t) : '—';
     const rv = revMap.has(t) ? revMap.get(t) : '—';
+    const df = fwdDistMap.has(t) ? formatKm(fwdDistMap.get(t)) : '—';
+    const dr = revDistMap.has(t) ? formatKm(revDistMap.get(t)) : '—';
     tr.innerHTML = `
       <td>${new Date(t).toLocaleString(LOCALE)}</td>
+      <td>${df}</td>
       <td>${fv}</td>
+      <td>${dr}</td>
       <td>${rv}</td>
     `;
     tbody.appendChild(tr);
@@ -113,8 +130,12 @@ async function reloadForCurrent() {
   document.getElementById('route').textContent = `${CURRENT.name || (CURRENT.origin + ' -> ' + CURRENT.destination)} (${CURRENT.mode})`;
   const fwdHdr = document.getElementById('colForward');
   const revHdr = document.getElementById('colReverse');
+  const distFwdHdr = document.getElementById('colDistFwd');
+  const distRevHdr = document.getElementById('colDistRev');
   if (fwdHdr) fwdHdr.innerHTML = `<span class="legend-dot fwd"></span>${CURRENT.name || (CURRENT.origin + ' → ' + CURRENT.destination)} (min)`;
   if (revHdr) revHdr.innerHTML = `<span class="legend-dot rev"></span>${(CURRENT.name || (CURRENT.origin + ' → ' + CURRENT.destination))} (reverse)`;
+  if (distFwdHdr) distFwdHdr.innerHTML = `<span class="legend-dot fwd"></span>Distance Fwd (km)`;
+  if (distRevHdr) distRevHdr.innerHTML = `<span class="legend-dot rev"></span>Distance Rev (km)`;
   APP_HISTORY = await fetchJSON(`/api/history?id=${encodeURIComponent(CURRENT.id)}`);
   renderSelectedDay();
 }

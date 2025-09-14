@@ -1,0 +1,9 @@
+{
+  "apiKey": "YOUR_GOOGLE_MAPS_API_KEY",
+  "origin": "1600 Amphitheatre Parkway, Mountain View, CA",
+  "destination": "1 Infinite Loop, Cupertino, CA",
+  "mode": "driving",
+  "intervalMinutes": 5,
+  "port": 8080
+}
+

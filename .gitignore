@@ -1,0 +1,13 @@
+# Local config with secrets
+config.json
+
+# Data logs
+data/
+
+# Node bits
+node_modules/
+npm-debug.log*
+pnpm-lock.yaml
+package-lock.json
+yarn.lock
+

@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ETA Tracker</title>
+    <link rel="stylesheet" href="/style.css" />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  </head>
+  <body>
+    <header>
+      <h1>ETA Tracker</h1>
+      <div id="route"></div>
+      <div id="meta"></div>
+    </header>
+
+    <main>
+      <section class="chart">
+        <canvas id="etaChart" height="120"></canvas>
+      </section>
+      <section class="table">
+        <h3>Recent Samples</h3>
+        <table id="samples">
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>ETA (min)</th>
+              <th>Distance (km)</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </section>
+    </main>
+
+    <footer>
+      <small>Updates periodically based on server schedule.</small>
+    </footer>
+
+    <script src="/app.js"></script>
+  </body>
+  </html>

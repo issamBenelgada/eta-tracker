@@ -30,3 +30,8 @@ section.table { margin-top: 16px; }
 table { width: 100%; border-collapse: collapse; }
 th, td { padding: 8px; border-bottom: 1px solid #1e2235; text-align: left; }
 th { color: var(--muted); font-weight: 600; }
+
+/* Legend dots for column headers */
+.legend-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+.legend-dot.fwd { background: #2b7cff; }
+.legend-dot.rev { background: #ff4d4f; }

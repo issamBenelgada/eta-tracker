@@ -62,17 +62,26 @@ function monthDay(d) {
   return d.toLocaleDateString(LOCALE, { month: 'short', day: '2-digit' });
 }
 
-function buildChart(ctx, points, xMin, xMax) {
+function buildChart(ctx, forwardPoints, reversePoints, xMin, xMax) {
   return new Chart(ctx, {
     type: 'line',
     data: {
       datasets: [
         {
-          label: 'ETA (minutes)',
-          data: points,
-          parsing: true, // uses x/y from objects
+          label: `${APP_CFG.origin} → ${APP_CFG.destination}`,
+          data: forwardPoints,
+          parsing: true,
           borderColor: '#2b7cff',
-          backgroundColor: 'rgba(43,124,255,0.1)',
+          backgroundColor: 'rgba(43,124,255,0.12)',
+          pointRadius: 0,
+          tension: 0.2,
+        },
+        {
+          label: `${APP_CFG.destination} → ${APP_CFG.origin}`,
+          data: reversePoints,
+          parsing: true,
+          borderColor: '#ff4d4f',
+          backgroundColor: 'rgba(255,77,79,0.12)',
           pointRadius: 0,
           tension: 0.2,
         },
@@ -124,13 +133,16 @@ function renderSelectedDay() {
   const end = endOfDay(selectedDate);
   const selKey = dateKey(start);
   const dayHistory = APP_HISTORY.filter((r) => dateKey(new Date(r.timestamp_iso)) === selKey);
-  const points = dayHistory
-    .filter((r) => r.duration_seconds != null)
+  const fwd = dayHistory
+    .filter((r) => r.duration_seconds != null && r.origin === APP_CFG.origin && r.destination === APP_CFG.destination)
+    .map((r) => ({ x: new Date(r.timestamp_iso).getTime(), y: formatMinutes(r.duration_seconds) }));
+  const rev = dayHistory
+    .filter((r) => r.duration_seconds != null && r.origin === APP_CFG.destination && r.destination === APP_CFG.origin)
     .map((r) => ({ x: new Date(r.timestamp_iso).getTime(), y: formatMinutes(r.duration_seconds) }));
 
   const ctx = document.getElementById('etaChart').getContext('2d');
   if (chartInstance) chartInstance.destroy();
-  chartInstance = buildChart(ctx, points, start.getTime(), end.getTime());
+  chartInstance = buildChart(ctx, fwd, rev, start.getTime(), end.getTime());
 
   const tbody = document.querySelector('#samples tbody');
   tbody.innerHTML = '';
@@ -145,6 +157,28 @@ function renderSelectedDay() {
     tbody.appendChild(tr);
   }
 
+  // Rebuild table with forward and reverse columns aligned by minute
+  {
+    const tbody2 = document.querySelector('#samples tbody');
+    tbody2.innerHTML = '';
+    const toMinute = (ms) => Math.floor(ms / (60 * 1000)) * 60 * 1000;
+    const fwdMap = new Map();
+    const revMap = new Map();
+    for (const p of fwd) fwdMap.set(toMinute(p.x), p.y);
+    for (const p of rev) revMap.set(toMinute(p.x), p.y);
+    const allTimes = Array.from(new Set([...fwdMap.keys(), ...revMap.keys()])).sort((a, b) => b - a);
+    for (const t of allTimes) {
+      const tr2 = document.createElement('tr');
+      const f = fwdMap.has(t) ? fwdMap.get(t) : '—';
+      const r = revMap.has(t) ? revMap.get(t) : '—';
+      tr2.innerHTML = `
+        <td>${new Date(t).toLocaleString(LOCALE)}</td>
+        <td>${f}</td>
+        <td>${r}</td>
+      `;
+      tbody2.appendChild(tr2);
+    }
+  }
   const currentDayLabel = document.getElementById('currentDayLabel');
   const today = startOfDay(new Date());
   const isToday = start.getTime() === today.getTime();
@@ -181,7 +215,19 @@ function renderWeekControls() {
 async function loadAll() {
   APP_CFG = await fetchJSON('/api/config');
   document.getElementById('route').textContent = `${APP_CFG.origin} → ${APP_CFG.destination} (${APP_CFG.mode})`;
+  // Update table headers to show both directions
+  const fwdHdr = document.getElementById('colForward');
+  const revHdr = document.getElementById('colReverse');
+  if (fwdHdr) fwdHdr.textContent = `${APP_CFG.origin} → ${APP_CFG.destination} (min)`;
+  if (revHdr) revHdr.textContent = `${APP_CFG.destination} → ${APP_CFG.origin} (min)`;
   // Removed sample interval message per request.
+  // Add colored markers to column headers for direction matching
+  (function(){
+    const fwdHdr = document.getElementById('colForward');
+    const revHdr = document.getElementById('colReverse');
+    if (fwdHdr) fwdHdr.innerHTML = `<span class=\"legend-dot fwd\"></span>${APP_CFG.origin} &rarr; ${APP_CFG.destination} (min)`;
+    if (revHdr) revHdr.innerHTML = `<span class=\"legend-dot rev\"></span>${APP_CFG.destination} &rarr; ${APP_CFG.origin} (min)`;
+  })();
 
   APP_HISTORY = await fetchJSON('/api/history');
   selectedDate = startOfDay(new Date());

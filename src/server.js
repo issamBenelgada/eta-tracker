@@ -228,15 +228,19 @@ async function main() {
   const config = loadConfig();
   ensureDirsAndLog();
 
-  let lastEntry = null;
+  let lastEntries = { forward: null, reverse: null };
 
-  // initial collection (non-blocking)
-  collectOnce(config).then((e) => (lastEntry = e)).catch(() => {});
+  // initial collection (non-blocking) for both directions
+  collectOnce({ ...config }).then((e) => (lastEntries.forward = e)).catch(() => {});
+  collectOnce({ ...config, origin: config.destination, destination: config.origin })
+    .then((e) => (lastEntries.reverse = e))
+    .catch(() => {});
 
-  // schedule periodic collection
+  // schedule periodic collection for both directions
   const intervalMs = config.intervalMinutes * 60 * 1000;
   setInterval(async () => {
-    try { lastEntry = await collectOnce(config); } catch {}
+    try { lastEntries.forward = await collectOnce({ ...config }); } catch {}
+    try { lastEntries.reverse = await collectOnce({ ...config, origin: config.destination, destination: config.origin }); } catch {}
   }, intervalMs);
 
   const server = http.createServer(async (req, res) => {
@@ -260,7 +264,7 @@ async function main() {
     }
     if (url.pathname === '/api/eta') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ last: lastEntry }));
+      res.end(JSON.stringify({ last: lastEntries }));
       return;
     }
     if (url.pathname === '/api/history') {
